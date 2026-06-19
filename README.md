@@ -14,6 +14,13 @@ Tested on Linux.
 
     make
 
+To cross-compile a Windows executable from Linux you need a mingw-w64
+toolchain and the SDL3 mingw libraries, then run:
+
+    make win64
+
+This produces `blockgame.exe`. Ship `SDL3.dll` alongside it to run on Windows.
+
 ### Running
 
     ./blockgame
