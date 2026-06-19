@@ -1,0 +1,227 @@
+package main
+
+import (
+    "fmt"
+    "math"
+)
+
+const (
+    WinW  = 680
+    WinH  = 720
+    Yaw   = 0.34
+    Tilt  = 0.34
+    Dist  = 30.0
+    Focal = 900.0
+    Scale = 1.0
+    CX    = 270.0
+    CY    = 330.0
+
+    DAS      = 150
+    ARR      = 40
+    SoftDrop = 40
+)
+
+func project(gx, gy, gz float64) (float64, float64) {
+    wx := (gx - BoardW/2.0) * Scale
+    wy := (gy - BoardH/2.0) * Scale
+    wz := gz * Scale
+    ca, sa := math.Cos(Yaw), math.Sin(Yaw)
+    x1 := wx*ca + wz*sa
+    z1 := -wx*sa + wz*ca
+    ct, st := math.Cos(Tilt), math.Sin(Tilt)
+    y2 := wy*ct + z1*st
+    z2 := -wy*st + z1*ct
+    zc := z2 + Dist
+    return CX + Focal*x1/zc, CY + Focal*y2/zc
+}
+
+func shade(c [3]uint8, f float64) (uint8, uint8, uint8) {
+    clamp := func(v float64) uint8 {
+        if v < 0 {
+            return 0
+        }
+        if v > 255 {
+            return 255
+        }
+        return uint8(v)
+    }
+    return clamp(float64(c[0]) * f), clamp(float64(c[1]) * f), clamp(float64(c[2]) * f)
+}
+
+func quad(ren *Renderer, a, b, c, d [2]float64, col [3]uint8, f float64) {
+    r, g, bl := shade(col, f)
+    ren.FillQuad(a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1], r, g, bl)
+}
+
+func corner(gx, gy, gz float64) [2]float64 {
+    x, y := project(gx, gy, gz)
+    return [2]float64{x, y}
+}
+
+func cube(ren *Renderer, gx, gy float64, col [3]uint8) {
+    quad(ren, corner(gx, gy, 0), corner(gx+1, gy, 0), corner(gx+1, gy, 1), corner(gx, gy, 1), col, 1.35)
+    quad(ren, corner(gx+1, gy, 0), corner(gx+1, gy, 1), corner(gx+1, gy+1, 1), corner(gx+1, gy+1, 0), col, 0.6)
+    quad(ren, corner(gx, gy, 0), corner(gx+1, gy, 0), corner(gx+1, gy+1, 0), corner(gx, gy+1, 0), col, 1.0)
+}
+
+func flatCell(ren *Renderer, gx, gy float64, col [3]uint8, f float64) {
+    quad(ren, corner(gx, gy, 0), corner(gx+1, gy, 0), corner(gx+1, gy+1, 0), corner(gx, gy+1, 0), col, f)
+}
+
+func drawWell(ren *Renderer) {
+    back := [3]uint8{18, 18, 24}
+    quad(ren, corner(0, 0, 1), corner(BoardW, 0, 1), corner(BoardW, BoardH, 1), corner(0, BoardH, 1), back, 1.0)
+    side := [3]uint8{30, 30, 40}
+    quad(ren, corner(0, 0, 0), corner(0, 0, 1), corner(0, BoardH, 1), corner(0, BoardH, 0), side, 1.0)
+    quad(ren, corner(BoardW, 0, 0), corner(BoardW, 0, 1), corner(BoardW, BoardH, 1), corner(BoardW, BoardH, 0), side, 0.7)
+    quad(ren, corner(0, BoardH, 0), corner(BoardW, BoardH, 0), corner(BoardW, BoardH, 1), corner(0, BoardH, 1), side, 0.85)
+}
+
+func drawBoard(ren *Renderer, board *Board) {
+    for y := 0; y < BoardH; y++ {
+        for x := 0; x < BoardW; x++ {
+            if cell := board.Cells[y][x]; cell != 0 {
+                cube(ren, float64(x), float64(y), Colors[cell-1])
+            }
+        }
+    }
+}
+
+func drawPiece(ren *Renderer, p *Piece) {
+    c := p.Color()
+    for _, bl := range p.Blocks() {
+        cube(ren, float64(p.X+bl[0]), float64(p.Y+bl[1]), c)
+    }
+}
+
+func drawGhost(ren *Renderer, game *Game) {
+    ghost := &Piece{Shape: game.Current.Shape, Rot: game.Current.Rot, X: game.Current.X, Y: game.Current.Y}
+    for !game.Board.Collides(ghost, 0, 1, ghost.Rot) {
+        ghost.Y++
+    }
+    c := ghost.Color()
+    for _, bl := range ghost.Blocks() {
+        flatCell(ren, float64(ghost.X+bl[0]), float64(ghost.Y+bl[1]), c, 0.35)
+    }
+}
+
+func drawNext(ren *Renderer, p *Piece) {
+    c := p.Color()
+    for _, bl := range p.Blocks() {
+        cube(ren, float64(BoardW+2+bl[0]), float64(3+bl[1]), c)
+    }
+}
+
+func main() {
+    if !SDLInit() {
+        fmt.Println("SDL init failed")
+        return
+    }
+    defer SDLQuit()
+
+    win := SDLCreateWindow("Blockgame 3D", WinW, WinH)
+    if win == nil {
+        fmt.Println("window creation failed")
+        return
+    }
+    defer win.Destroy()
+
+    ren := SDLCreateRenderer(win)
+    if ren == nil {
+        fmt.Println("renderer creation failed")
+        return
+    }
+    defer ren.Destroy()
+
+    game := NewGame()
+    var ev Event
+
+    running := true
+    paused := false
+    lastDir := 0
+    var moveTime, dropTime uint64
+    for running {
+        for SDLPollEvent(&ev) {
+            if ev.Type() == SDL_EVENT_QUIT {
+                running = false
+            } else if ev.Type() == SDL_EVENT_KEY_DOWN && !ev.KeyRepeat() {
+                switch ev.KeyScancode() {
+                case SCANCODE_UP:
+                    game.Rotate()
+                case SCANCODE_SPACE:
+                    game.HardDrop()
+                case SCANCODE_P:
+                    paused = !paused
+                case SCANCODE_R:
+                    game.Reset()
+                    paused = false
+                case SCANCODE_Q, SCANCODE_ESC:
+                    running = false
+                }
+            }
+        }
+
+        now := SDLGetTicks()
+        if !paused && !game.Over {
+            dir := 0
+            if KeyHeld(SCANCODE_LEFT) {
+                dir = -1
+            }
+            if KeyHeld(SCANCODE_RIGHT) {
+                dir = 1
+            }
+            if dir != lastDir {
+                lastDir = dir
+                if dir != 0 {
+                    game.Move(dir)
+                    moveTime = now + DAS
+                }
+            } else if dir != 0 && now >= moveTime {
+                game.Move(dir)
+                moveTime = now + ARR
+            }
+
+            if KeyHeld(SCANCODE_DOWN) {
+                if now >= dropTime {
+                    game.MoveDown()
+                    dropTime = now + SoftDrop
+                }
+            } else {
+                dropTime = 0
+            }
+
+            game.Update()
+        }
+
+        ren.SetDrawColor(12, 12, 16, 255)
+        ren.Clear()
+
+        drawWell(ren)
+        drawBoard(ren, game.Board)
+        if !game.Over {
+            drawGhost(ren, game)
+            drawPiece(ren, game.Current)
+        }
+        drawNext(ren, game.Next)
+
+        hx := 470
+        drawText(ren, "NEXT", hx, 70, 4, 220, 220, 220)
+        drawText(ren, "SCORE", hx, 300, 4, 220, 220, 220)
+        drawText(ren, fmt.Sprintf("%d", game.Board.Score), hx, 330, 4, 120, 230, 120)
+        drawText(ren, "LEVEL", hx, 390, 4, 220, 220, 220)
+        drawText(ren, fmt.Sprintf("%d", game.Board.Level), hx, 420, 4, 120, 230, 120)
+        drawText(ren, "LINES", hx, 480, 4, 220, 220, 220)
+        drawText(ren, fmt.Sprintf("%d", game.Board.Lines), hx, 510, 4, 120, 230, 120)
+
+        if game.Over {
+            drawText(ren, "GAME OVER", 140, 320, 6, 240, 80, 80)
+        } else if paused {
+            drawText(ren, "PAUSE", 190, 320, 6, 240, 240, 80)
+        }
+
+        ren.Present()
+    }
+
+    fmt.Printf("Game Over! Score: %d, Lines: %d, Level: %d\n",
+        game.Board.Score, game.Board.Lines, game.Board.Level)
+}

@@ -1,0 +1,214 @@
+package main
+
+import "math/rand"
+
+const (
+	BoardW = 10
+	BoardH = 20
+)
+
+var Shapes = [7][4][4][2]int{
+	{{{0, 0}, {1, 0}, {2, 0}, {3, 0}}, {{0, 0}, {0, 1}, {0, 2}, {0, 3}}, {{0, 0}, {1, 0}, {2, 0}, {3, 0}}, {{0, 0}, {0, 1}, {0, 2}, {0, 3}}},
+	{{{0, 0}, {1, 0}, {0, 1}, {1, 1}}, {{0, 0}, {1, 0}, {0, 1}, {1, 1}}, {{0, 0}, {1, 0}, {0, 1}, {1, 1}}, {{0, 0}, {1, 0}, {0, 1}, {1, 1}}},
+	{{{0, 0}, {1, 0}, {2, 0}, {1, 1}}, {{0, 0}, {0, 1}, {0, 2}, {1, 1}}, {{1, 0}, {0, 1}, {1, 1}, {2, 1}}, {{1, 0}, {1, 1}, {1, 2}, {0, 1}}},
+	{{{1, 0}, {2, 0}, {0, 1}, {1, 1}}, {{0, 0}, {0, 1}, {1, 1}, {1, 2}}, {{1, 0}, {2, 0}, {0, 1}, {1, 1}}, {{0, 0}, {0, 1}, {1, 1}, {1, 2}}},
+	{{{0, 0}, {1, 0}, {1, 1}, {2, 1}}, {{1, 0}, {0, 1}, {1, 1}, {0, 2}}, {{0, 0}, {1, 0}, {1, 1}, {2, 1}}, {{1, 0}, {0, 1}, {1, 1}, {0, 2}}},
+	{{{0, 0}, {0, 1}, {1, 1}, {2, 1}}, {{0, 0}, {1, 0}, {0, 1}, {0, 2}}, {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, {{1, 0}, {1, 1}, {0, 2}, {1, 2}}},
+	{{{2, 0}, {0, 1}, {1, 1}, {2, 1}}, {{0, 0}, {0, 1}, {0, 2}, {1, 2}}, {{0, 0}, {1, 0}, {2, 0}, {0, 1}}, {{0, 0}, {1, 0}, {1, 1}, {1, 2}}},
+}
+
+var Colors = [7][3]uint8{
+	{0, 255, 255},
+	{255, 255, 0},
+	{128, 0, 128},
+	{0, 255, 0},
+	{255, 0, 0},
+	{0, 0, 255},
+	{255, 165, 0},
+}
+
+class Piece {
+	Shape int
+	Rot   int
+	X     int
+	Y     int
+
+	new(shape int) {
+		this.Shape = shape
+		this.Rot = 0
+		this.X = BoardW/2 - 2
+		this.Y = 0
+	}
+
+	func Blocks() [4][2]int {
+		return Shapes[this.Shape][this.Rot]
+	}
+
+	func Color() [3]uint8 {
+		return Colors[this.Shape]
+	}
+}
+
+class Board {
+	Cells  [BoardH][BoardW]int
+	Score  int
+	Lines  int
+	Level  int
+
+	new() {
+		this.Level = 1
+	}
+
+	func Collides(p *Piece, dx, dy, rot int) bool {
+		blocks := Shapes[p.Shape][rot]
+		for _, b := range blocks {
+			nx := p.X + b[0] + dx
+			ny := p.Y + b[1] + dy
+			if nx < 0 || nx >= BoardW || ny >= BoardH {
+				return true
+			}
+			if ny >= 0 && this.Cells[ny][nx] != 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	func Lock(p *Piece) {
+		blocks := p.Blocks()
+		for _, b := range blocks {
+			nx := p.X + b[0]
+			ny := p.Y + b[1]
+			if ny >= 0 && ny < BoardH && nx >= 0 && nx < BoardW {
+				this.Cells[ny][nx] = p.Shape + 1
+			}
+		}
+	}
+
+	func ClearLines() int {
+		cleared := 0
+		for y := BoardH - 1; y >= 0; y-- {
+			full := true
+			for x := 0; x < BoardW; x++ {
+				if this.Cells[y][x] == 0 {
+					full = false
+					break
+				}
+			}
+			if full {
+				cleared++
+				for yy := y; yy > 0; yy-- {
+					this.Cells[yy] = this.Cells[yy-1]
+				}
+				this.Cells[0] = [BoardW]int{}
+				y++
+			}
+		}
+		if cleared > 0 {
+			points := []int{0, 100, 300, 500, 800}
+			this.Score += points[cleared] * this.Level
+			this.Lines += cleared
+			this.Level = this.Lines/10 + 1
+		}
+		return cleared
+	}
+}
+
+class Game {
+	Board    *Board
+	Current  *Piece
+	Next     *Piece
+	Over     bool
+	DropTime uint64
+	Speed    uint64
+
+	new() {
+		this.Board = NewBoard()
+		this.Current = NewPiece(rand.Intn(7))
+		this.Next = NewPiece(rand.Intn(7))
+		this.Speed = 500
+		this.DropTime = SDLGetTicks()
+	}
+
+	func Spawn() {
+		this.Current = this.Next
+		this.Next = NewPiece(rand.Intn(7))
+		if this.Board.Collides(this.Current, 0, 0, this.Current.Rot) {
+			this.Over = true
+		}
+	}
+
+	func MoveLeft() {
+		if !this.Board.Collides(this.Current, -1, 0, this.Current.Rot) {
+			this.Current.X--
+		}
+	}
+
+	func MoveRight() {
+		if !this.Board.Collides(this.Current, 1, 0, this.Current.Rot) {
+			this.Current.X++
+		}
+	}
+
+	func Move(dir int) {
+		if dir < 0 {
+			this.MoveLeft()
+		} else if dir > 0 {
+			this.MoveRight()
+		}
+	}
+
+	func MoveDown() bool {
+		if !this.Board.Collides(this.Current, 0, 1, this.Current.Rot) {
+			this.Current.Y++
+			return true
+		}
+		return false
+	}
+
+	func Rotate() {
+		newRot := (this.Current.Rot + 1) % 4
+		if !this.Board.Collides(this.Current, 0, 0, newRot) {
+			this.Current.Rot = newRot
+		}
+	}
+
+	func HardDrop() {
+		for this.MoveDown() {
+		}
+		this.Place()
+	}
+
+	func Place() {
+		this.Board.Lock(this.Current)
+		this.Board.ClearLines()
+		this.Speed = uint64(500 - (this.Board.Level-1)*40)
+		if this.Speed < 50 {
+			this.Speed = 50
+		}
+		this.Spawn()
+		this.DropTime = SDLGetTicks()
+	}
+
+	func Update() {
+		if this.Over {
+			return
+		}
+		now := SDLGetTicks()
+		if now-this.DropTime >= this.Speed {
+			if !this.MoveDown() {
+				this.Place()
+			}
+			this.DropTime = now
+		}
+	}
+
+	func Reset() {
+		this.Board = NewBoard()
+		this.Current = NewPiece(rand.Intn(7))
+		this.Next = NewPiece(rand.Intn(7))
+		this.Speed = 500
+		this.DropTime = SDLGetTicks()
+		this.Over = false
+	}
+}
