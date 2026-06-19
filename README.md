@@ -1,6 +1,8 @@
 # Blockgame
 
-A 3D game about falling blocks, written in Go++ that uses SDL3.
+A software rendered 3D game about falling blocks, written in Go++, that uses SDL3.
+
+![screenshot](img/screenshot.png)
 
 Tested on Linux.
 
@@ -10,11 +12,11 @@ Tested on Linux.
 
 ### Building
 
-make
+    make
 
 ### Running
 
-make run
+    ./blockgame
 
 ### General info
 
